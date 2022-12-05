@@ -1,14 +1,29 @@
-#!/usr/bin/env python
-# coding: utf-8
+# ---
+# jupyter:
+#   jupytext:
+#     formats: ipynb,py
+#     text_representation:
+#       extension: .py
+#       format_name: light
+#       format_version: '1.5'
+#       jupytext_version: 1.14.1
+#   kernelspec:
+#     display_name: Python 3 (ipykernel)
+#     language: python
+#     name: python3
+# ---
 
-#%%
+import os
 import datetime
 import dateutil
 import pandas as pd
 import requests
+import matplotlib
 import matplotlib.pyplot as plt
 
-#%% Functions
+
+# Functions
+
 def moving_avg(df, freq):
     ma_df = df.copy()
     ma_df = ma_df.set_index([cols.freq,cols.date])
@@ -22,8 +37,10 @@ def moving_avg(df, freq):
                   (ma_df.groupby([i for i in ma_df if i not in [cols.date,'value']])['value'].ffill().notnull())]
     ma_df = pd.pivot_table(ma_df,index=cols.base,columns=['variable'],values='value')
     ma_df = ma_df.reset_index()
+
     ma_df = ma_df[df.columns.tolist()]
     return(ma_df)
+
 
 def get_pop(cty):
     url_root = 'https://restcountries.com/v3.1/name/'
@@ -32,6 +49,7 @@ def get_pop(cty):
     response = requests.get(url_root + ''.join(cty.lower().split()) + url_suffix)
     json_data = response.json()
     return(json_data[0]['population'])
+
 
 # merge populations into cases df to find number of cases per million people
 def merge_pop(df, pop_dict):
@@ -45,7 +63,9 @@ def merge_pop(df, pop_dict):
 
     return(merged_df)
 
-def plot_chart(df, country_list, freq, no_months=12, export=False):
+
+def plot_timeseries(df, country_list, freq, no_months=12, export=False):
+
     meta = {'x-axis':cols.date,
             'y-axis':f'{cols.cases_new} per Million Population',
             'fontsize':8,
@@ -90,9 +110,15 @@ def plot_chart(df, country_list, freq, no_months=12, export=False):
     if export:
         fig.savefig(f'{meta["title"]}.jpg', bbox_inches='tight', format='jpg', dpi=360)
 
-#%% Static data
+
+# Static data 
+
 countries = ['Indonesia','Malaysia','Philippines','Singapore','Thailand','Viet Nam']
 
+ma_days = 7
+
+
+# +
 class Cols:
     def __init__(self):
         self.freq = 'Frequency'
@@ -112,14 +138,16 @@ class Cols:
                        'Cumulative_cases':self.cases_all, 'Cumulative_deaths':self.deaths_all}
 
 cols = Cols()
+# -
 
-#%% COVID cases data
+# COVID cases data
 
 # WHO COVID-19 cases
 covid_url = 'https://covid19.who.int/'
 covid_file = covid_url + 'WHO-COVID-19-global-data.csv'
 covid_df = pd.read_csv(covid_file, encoding='utf-8')
 
+# +
 # keep only selected columns and countries and clean df
 countries_df = covid_df[[cols.country] + list(cols.rename.keys())]
 countries_df = countries_df[countries_df[cols.country].isin(countries)].reset_index(drop=True)
@@ -129,24 +157,23 @@ countries_df = countries_df.rename(columns=cols.rename)
 countries_df[cols.date] = pd.to_datetime(countries_df[cols.date]).dt.date
 
 # add moving average
-days = 7
 countries_df[cols.freq] = 'Actual'
 countries_df = countries_df[cols.base+cols.data]
-countries_df = pd.concat([countries_df, moving_avg(countries_df, days)]).reset_index(drop=True)
+countries_df = pd.concat([countries_df, moving_avg(countries_df, ma_days)]).reset_index(drop=True)
+# -
 
 # Country population data (https://restcountries.com)
+
 pop = {}
 for cty in countries:
     pop[cty] = get_pop(cty)
 
 countries_df_pop = merge_pop(countries_df, pop)
 
-#%% Plot charts
-plot_chart(df=countries_df_pop,
-           country_list=set(countries_df_pop[cols.country]),
-           freq=f'{days}-day Moving Average',
-           no_months=12,
-           export=False)
+# Plot charts 
 
-#%% Export dataframes
-#countries_df_pop.to_csv('COVID Cases by Country.csv', index=False)
+plot_timeseries(df=countries_df_pop,
+                country_list=set(countries_df_pop[cols.country]),
+                freq=f'{ma_days}-day Moving Average',
+                no_months=12,
+                export=False)
