@@ -1,25 +1,10 @@
-# ---
-# jupyter:
-#   jupytext:
-#     formats: ipynb,py
-#     text_representation:
-#       extension: .py
-#       format_name: light
-#       format_version: '1.5'
-#       jupytext_version: 1.14.1
-#   kernelspec:
-#     display_name: Python 3 (ipykernel)
-#     language: python
-#     name: python3
-# ---
-
-import os
 import datetime
 import dateutil
 import pandas as pd
 import requests
-import matplotlib
 import matplotlib.pyplot as plt
+import plotly.express as px
+import plotly.graph_objects as go
 
 
 # Functions
@@ -27,7 +12,7 @@ import matplotlib.pyplot as plt
 def moving_avg(df, freq):
     ma_df = df.copy()
     ma_df = ma_df.set_index([cols.freq,cols.date])
-    ma_df = ma_df.groupby([cols.country])[[i for i in ma_df.columns.tolist() if i!=cols.country]].rolling(freq).mean()
+    ma_df = ma_df.groupby([cols.region, cols.country])[[i for i in ma_df.columns.tolist() if not i in [cols.region, cols.country]]].rolling(freq).mean()
     ma_df = ma_df.reset_index()
     ma_df[cols.freq] = f'{freq}-day Moving Average'
 
@@ -62,6 +47,13 @@ def merge_pop(df, pop_dict):
         merged_df[f'{i} per Million Population'] = merged_df[i] / merged_df[cols.pop]
 
     return(merged_df)
+
+
+# latest date for all countries
+def last_date(df):
+    latest = df.sort_values(by=cols.date).drop_duplicates(subset=cols.country, keep='last')
+    latest = latest[latest[cols.cases_new]>0].reset_index(drop=True)
+    return(latest)
 
 
 def plot_timeseries(df, country_list, freq, no_months=12, export=False):
@@ -111,9 +103,87 @@ def plot_timeseries(df, country_list, freq, no_months=12, export=False):
         fig.savefig(f'{meta["title"]}.jpg', bbox_inches='tight', format='jpg', dpi=360)
 
 
+def sunburst_data(df, root_name, col_plot):
+    # each observation in parent must occur in labels
+    data = df.copy()
+
+    data_parent = data.groupby([cols.region,cols.date],as_index=False)[cols.data].sum()
+    data_parent[cols.country] = data_parent[cols.region]
+    data_parent[cols.region] = root_name
+
+    data_root = data.copy()
+    data_root[cols.country] = root_name
+    data_root = data_root.groupby([cols.country,cols.date],as_index=False)[cols.data].sum()
+
+    data = pd.concat([data, data_parent, data_root]).reset_index(drop=True)
+    data = dict(labels=data[cols.country].tolist(),
+                parents=data[cols.region].tolist(),
+                values=data[col_plot].tolist())
+    return(data)
+
+
+def plot_go_sunburst1(df, root_name, col_plot):
+    date = str(list(set(df[cols.date]))[0].strftime('%d %b %Y'))
+
+    # hover: unable to format to include thousands separator (inconsistent when hovering)
+    # hover: unable to format percentages to 1dp
+    fig = go.Figure(go.Sunburst(**sunburst_data(latest, 'World', col_plot),
+                                branchvalues='total',
+                                customdata=[cols.date],
+                                texttemplate='%{label}<br>%{value:,.0f}',
+                                hovertext=date,
+                                hoverinfo='label+value+percent parent+percent root+text'))
+
+    fig.update_layout(title={'text':f'<b>{col_plot} on {date}<b>', 'x':0.5, 'y':0.88, 'font':{'size':14}})
+
+    fig.show()
+
+
+def plot_go_sunburst2(df, root_name, col_plot):
+    date = str(list(set(df[cols.date]))[0].strftime('%d %b %Y'))
+
+    fig = go.Figure(go.Sunburst(**sunburst_data(latest, 'World', col_plot),
+                                branchvalues='total',
+                                customdata=[cols.date],
+                                texttemplate='%{label}<br>%{value:,.0f}'))
+
+    fig.update_layout(title={'text':f'<b>{col_plot} on {date}<b>', 'x':0.5, 'y':0.88, 'font':{'size':14}})
+
+    # unable to add customdata
+    # unable to customise to show % root+parent at child level, and root only at parent level
+    fig.update_traces(hovertemplate='%{label}<br>%{value:,.0f}<br>%{percentParent:.1%} of %{parent}<br>%{percentRoot:.1%} of %{root}<br>%{custom_data[0]}')
+
+    fig.show()
+
+
+def plot_px_sunburst(df, root_name, col_plot):
+    plot_df = df.copy()
+    plot_df[cols.date] = pd.to_datetime(plot_df[cols.date]).dt.strftime('%d %b %Y')
+    plot_df['root'] = root_name
+
+    fig = px.sunburst(plot_df, path=['root', cols.region, cols.country], values=col_plot,
+                      custom_data=[cols.date],
+                      title=f'<b>{col_plot} on {list(set(plot_df[cols.date]))[0]}<b>',
+                      color=col_plot,color_continuous_scale='orrd')
+
+    # https://plotly.com/python/reference/sunburst/#sunburst-hovertemplate
+    # unable to customise to show % root+parent at child level, and root only at parent level
+    fig.update_layout(title={'x':0.5,'y':0.88,'font':{'size':14}})
+    fig.update_traces(texttemplate='%{label}<br>%{value:,.0f}',
+                      hovertemplate='%{label}<br>%{value:,.0f}<br>%{percentParent:.1%} of %{parent}<br>%{percentRoot:.1%} of %{root}<br>%{customdata[0]}')
+    fig.show()
+
+
 # Static data 
 
-countries = ['Indonesia','Malaysia','Philippines','Singapore','Thailand','Viet Nam']
+regions = {'AFRO':'Africa',
+           'AMRO':'Americas',
+           'EMRO':'Eastern Mediterranean',
+           'EURO':'Europe',
+           'SEARO':'South-East Asia',
+           'WPRO':'Western Pacific'}
+
+asean = ['Indonesia','Malaysia','Philippines','Singapore','Thailand','Viet Nam']
 
 ma_days = 7
 
@@ -123,6 +193,7 @@ class Cols:
     def __init__(self):
         self.freq = 'Frequency'
         self.date = 'Date Reported'
+        self.region = 'Region'
         self.country = 'Country'
         self.pop = 'Population (Million)'
         self.cases_new = 'New Cases'
@@ -130,10 +201,10 @@ class Cols:
         self.deaths_new = 'New Deaths'
         self.deaths_all = 'Cumulative Deaths'
 
-        self.base = [self.country, self.freq, self.date]
+        self.base = [self.region, self.country, self.freq, self.date]
         self.data = [self.cases_new, self.deaths_new, self.cases_all, self.deaths_all]
 
-        self.rename = {'Date_reported':self.date,
+        self.rename = {'WHO_region':'Region','Date_reported':self.date,
                        'New_cases':self.cases_new, 'New_deaths':self.deaths_new,
                        'Cumulative_cases':self.cases_all, 'Cumulative_deaths':self.deaths_all}
 
@@ -148,32 +219,47 @@ covid_file = covid_url + 'WHO-COVID-19-global-data.csv'
 covid_df = pd.read_csv(covid_file, encoding='utf-8')
 
 # +
-# keep only selected columns and countries and clean df
+# keep only selected columns and clean df
 countries_df = covid_df[[cols.country] + list(cols.rename.keys())]
-countries_df = countries_df[countries_df[cols.country].isin(countries)].reset_index(drop=True)
 countries_df = countries_df.rename(columns=cols.rename)
+countries_df = countries_df[[cols.region]+[i for i in list(countries_df) if i!=cols.region]]
+
+# rename regions to proper names
+countries_df[cols.region] = countries_df[cols.region].map(regions)
 
 # date format as pd.datetime
 countries_df[cols.date] = pd.to_datetime(countries_df[cols.date]).dt.date
 
+# +
+# keep only asean
+asean_df = countries_df[countries_df[cols.country].isin(asean)].reset_index(drop=True)
+
 # add moving average
-countries_df[cols.freq] = 'Actual'
-countries_df = countries_df[cols.base+cols.data]
-countries_df = pd.concat([countries_df, moving_avg(countries_df, ma_days)]).reset_index(drop=True)
+asean_df[cols.freq] = 'Actual'
+asean_df = asean_df[cols.base+cols.data]
+asean_df = pd.concat([asean_df, moving_avg(asean_df, ma_days)]).reset_index(drop=True)
 # -
 
 # Country population data (https://restcountries.com)
 
 pop = {}
-for cty in countries:
+for cty in asean:
     pop[cty] = get_pop(cty)
 
-countries_df_pop = merge_pop(countries_df, pop)
+asean_df_pop = merge_pop(asean_df, pop)
 
 # Plot charts 
 
-plot_timeseries(df=countries_df_pop,
-                country_list=set(countries_df_pop[cols.country]),
+plot_timeseries(df=asean_df_pop,
+                country_list=set(asean_df_pop[cols.country]),
                 freq=f'{ma_days}-day Moving Average',
                 no_months=12,
                 export=False)
+
+latest = last_date(countries_df)
+
+plot_go_sunburst1(latest, 'World', cols.cases_new)
+
+plot_go_sunburst2(latest, 'World', cols.cases_new)
+
+plot_px_sunburst(latest, 'World', cols.cases_new)
